@@ -1,0 +1,52 @@
+Enrollment:
+
+7 facial angles
+
+center
+down 
+up 
+semi left
+left
+semi right
+right
+
+uses 7 vectors for facial features capture at 7 angles
+
+--> each vector is 512 elements long and of type float32
+
+required fields:
+
+case 1:
+
+{
+    emp_id      : str
+    center      : <vector 512 float32>
+    down        : <vector 512 float32> 
+    up          : <vector 512 float32> 
+    semi_left   : <vector 512 float32>
+    left        : <vector 512 float32>
+    semi_right  : <vector 512 float32>
+    right       : <vector 512 float32>
+
+}
+
+case 2:
+
+{
+    emp_id: str
+    vector:  <vector 512 float32>
+    type: [base/additional]
+    angle:  # only if type is base. one of [center down up semi_left left semi_right right]
+    
+}
+
+
+Recognition:
+
+required fields:
+
+{
+    vector: <vector 512 float32>
+}
+
+
