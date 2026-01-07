@@ -5,8 +5,8 @@ import cv2
 from datetime import datetime
 from abc import ABC, abstractmethod
 
-import psycopg2
-import psycopg2.extras
+# import psycopg2
+# import psycopg2.extras
 
 # --- THE INTERFACE ---
 class BaseStorageAdapter(ABC):
@@ -88,66 +88,66 @@ class FileSystemAdapter(BaseStorageAdapter):
                 print(f"Error loading {emp_id}: {e}")
         return identities
     
-class PostgresAdapter(BaseStorageAdapter):
-    def __init__(self, dbname, user, password, host='localhost', port=5432):
-        self.conn = psycopg2.connect(
-            dbname=dbname, user=user, password=password, host=host, port=port
-        )
-        self._ensure_tables()
+# class PostgresAdapter(BaseStorageAdapter):
+#     def __init__(self, dbname, user, password, host='localhost', port=5432):
+#         self.conn = psycopg2.connect(
+#             dbname=dbname, user=user, password=password, host=host, port=port
+#         )
+#         self._ensure_tables()
 
-    def _ensure_tables(self):
-        with self.conn.cursor() as cur:
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS identities (
-                id TEXT PRIMARY KEY,
-                name TEXT,
-                created_at TIMESTAMP,
-                model TEXT
-            );
-            """)
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS vectors (
-                emp_id TEXT REFERENCES identities(id),
-                angle TEXT,
-                vector FLOAT8[],
-                PRIMARY KEY (emp_id, angle)
-            );
-            """)
-            self.conn.commit()
+#     def _ensure_tables(self):
+#         with self.conn.cursor() as cur:
+#             cur.execute("""
+#             CREATE TABLE IF NOT EXISTS identities (
+#                 id TEXT PRIMARY KEY,
+#                 name TEXT,
+#                 created_at TIMESTAMP,
+#                 model TEXT
+#             );
+#             """)
+#             cur.execute("""
+#             CREATE TABLE IF NOT EXISTS vectors (
+#                 emp_id TEXT REFERENCES identities(id),
+#                 angle TEXT,
+#                 vector FLOAT8[],
+#                 PRIMARY KEY (emp_id, angle)
+#             );
+#             """)
+#             self.conn.commit()
 
-    def save_identity(self, emp_id, name, bucket_data):
-        with self.conn.cursor() as cur:
-            # 1. Save Metadata
-            cur.execute("""
-                INSERT INTO identities (id, name, created_at, model)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name;
-            """, (emp_id, name, datetime.now(), "buffalo_l"))
+#     def save_identity(self, emp_id, name, bucket_data):
+#         with self.conn.cursor() as cur:
+#             # 1. Save Metadata
+#             cur.execute("""
+#                 INSERT INTO identities (id, name, created_at, model)
+#                 VALUES (%s, %s, %s, %s)
+#                 ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name;
+#             """, (emp_id, name, datetime.now(), "buffalo_l"))
 
-            # 2. Save Vectors
-            for angle, data in bucket_data.items():
-                if data["captured"]:
-                    vec = data["vector"]
-                    vec = vec / np.linalg.norm(vec)
-                    cur.execute("""
-                        INSERT INTO vectors (emp_id, angle, vector)
-                        VALUES (%s, %s, %s)
-                        ON CONFLICT (emp_id, angle) DO UPDATE SET vector=EXCLUDED.vector;
-                    """, (emp_id, angle, vec.tolist()))
-            self.conn.commit()
-        print(f"[PostgresStorage] Saved {emp_id} ({name})")
+#             # 2. Save Vectors
+#             for angle, data in bucket_data.items():
+#                 if data["captured"]:
+#                     vec = data["vector"]
+#                     vec = vec / np.linalg.norm(vec)
+#                     cur.execute("""
+#                         INSERT INTO vectors (emp_id, angle, vector)
+#                         VALUES (%s, %s, %s)
+#                         ON CONFLICT (emp_id, angle) DO UPDATE SET vector=EXCLUDED.vector;
+#                     """, (emp_id, angle, vec.tolist()))
+#             self.conn.commit()
+#         print(f"[PostgresStorage] Saved {emp_id} ({name})")
 
-    def load_identities(self):
-        identities = {}
-        with self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute("SELECT * FROM identities;")
-            for row in cur.fetchall():
-                emp_id = row['id']
-                name = row['name']
-                cur.execute("SELECT vector FROM vectors WHERE emp_id=%s;", (emp_id,))
-                vectors = [np.array(v['vector']) for v in cur.fetchall()]
-                identities[emp_id] = {"name": name, "vectors": vectors}
-        return identities
+#     def load_identities(self):
+#         identities = {}
+#         with self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+#             cur.execute("SELECT * FROM identities;")
+#             for row in cur.fetchall():
+#                 emp_id = row['id']
+#                 name = row['name']
+#                 cur.execute("SELECT vector FROM vectors WHERE emp_id=%s;", (emp_id,))
+#                 vectors = [np.array(v['vector']) for v in cur.fetchall()]
+#                 identities[emp_id] = {"name": name, "vectors": vectors}
+#         return identities
 
 
 # --- FACTORY ---
