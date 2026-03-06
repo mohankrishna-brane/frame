@@ -2,8 +2,10 @@ import numpy as np
 import psycopg2
 import json
 import uuid
+import sys
 # --- CONFIGURATION ---
-NPY_FILE_PATH = "data/vectors/N0058.npy"  # Replace with your actual file path
+person_id = sys.argv[1] if len(sys.argv) > 1 else ""
+NPY_FILE_PATH = f"data/vectors/{person_id}.npy"
 
 # Mapping of angle keys to (is_frontal, is_primary)
 ANGLE_CONFIG = {
@@ -16,10 +18,10 @@ ANGLE_CONFIG = {
     'right_full': (False, False),
 }
 DB_CONFIG = {
-    "dbname": "workflow_system_edge_simulate",
+    "dbname": "workflow_system",
     "user": "postgres",
-    "password": "",
-    "host": "localhost",
+    "password": "9ets0n1234",
+    "host": "10.26.1.175",
     "port": "5432"
 }
 
@@ -41,9 +43,15 @@ def migrate_embeddings():
             return
 
         # Extract person_id from filename (e.g., "NH3775.npy" -> "NH3775")
-        person_id = NPY_FILE_PATH.split('/')[-1].replace('.npy', '')
+        # person_id = NPY_FILE_PATH.split('/')[-1].replace('.npy', '')
 
-        print(f"Found {len(embeddings_dict)} angle vectors for person {person_id}.")
+        # Load person name from metadata file
+        metadata_path = f"data/metadata/{person_id}.json"
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+        person_name = metadata['name']
+
+        print(f"Found {len(embeddings_dict)} angle vectors for person {person_id} ({person_name}).")
 
     except Exception as e:
         print(f"Failed to load NPY file: {e}")
@@ -77,20 +85,20 @@ def migrate_embeddings():
             dimension = len(vector_data) if isinstance(vector_data, list) else 512
 
             cur.execute(insert_query, (
-                str(uuid.uuid4()),         # face_encoding_id
+                str(uuid.uuid4()),   # face_encoding_id
                 'employee',          # person_type
                 safe_vector,         # encoding_vector
-                'insightface',         # encoding_model
+                'insightface',       # encoding_model
                 dimension,           # encoding_dimension
                 None,                # face_location (null for base encodings)
                 None,                # face_quality_score
                 json.dumps({'angle':angle_name}),          # face_angle (e.g., 'center', 'look_up', etc.)
                 is_frontal,          # is_frontal
                 is_primary,          # is_primary
-                'T28',                   # tenant_id (adjust as needed)
+                'T689',              # tenant_id (adjust as needed)
                 True,                # is_active
                 person_id,           # person_id
-                person_id            # person_name (using person_id, adjust if you have actual names)
+                person_name          # person_name from metadata
             ))
             count += 1
 
