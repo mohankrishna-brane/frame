@@ -185,31 +185,33 @@ RTC_CONFIG = RTCConfiguration({
 # ---------------------------------------------------------------------------
 class FaceEnrollmentProcessor(VideoProcessorBase):
     def __init__(self):
-        self.engine  = get_engine()           # stateless, safe to share
-        self.session = get_enrollment_session()  # shared singleton
-        self._frame_count = 0                 # FIX: was missing → AttributeError
+        self.engine       = get_engine()
+        self.session      = get_enrollment_session()
+        self._frame_count = 0
+        self._last_output = None   # cache last annotated frame to avoid flicker
 
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
         img = frame.to_ndarray(format="bgr24")
         img = cv2.flip(img, 1)
-
         self._frame_count += 1
 
-        # FIX: always return the frame so video never freezes;
-        # skip heavy ML inference on odd frames only.
+        # On skipped frames return the last annotated output so overlays don't flicker.
+        # We still consume the incoming frame (keeps WebRTC happy / stream alive).
         if self._frame_count % 2 != 0:
+            if self._last_output is not None:
+                return self._last_output
             return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-        faces = self.engine.process_frame(img)
-        h_img, w_img = img.shape[:2]
-
-        # Collect all updates, then write once → minimise lock hold time
+        out   = img.copy()          # draw on a copy so img stays clean for crop
+        h_img, w_img = out.shape[:2]
         updates = {}
+
+        faces = self.engine.process_frame(img)
 
         if len(faces) == 1:
             face = faces[0]
             pitch, yaw, roll = self.engine.compute_pose(face)
-            yaw = -yaw  # mirror to match flipped video
+            yaw = -yaw
 
             b = face.bbox.astype(int)
             x1, y1 = max(0, b[0]), max(0, b[1])
@@ -218,50 +220,50 @@ class FaceEnrollmentProcessor(VideoProcessorBase):
 
             updates["pitch"] = float(pitch)
             updates["yaw"]   = float(yaw)
-
-            # Build captured list
-            _, buckets = self.session.get_progress()
             updates["buckets_captured"] = [
                 name for name in ALL_ANGLES
-                if buckets.get(name, {}).get("captured", False)
+                if self.session.get_progress()[1].get(name, {}).get("captured", False)
             ]
 
-            if self.session.state == "PRE_CHECK":
+            sess_state = self.session.state   # read once to avoid race
+
+            if sess_state == "PRE_CHECK":
                 is_ready, msg = self.session.run_pre_check(face, pitch, yaw)
-                color = (0, 255, 0) if is_ready else (100, 100, 255)
-                cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(img, msg, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                color = (0, 220, 0) if is_ready else (80, 80, 255)
+                cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(out, msg, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
                 updates["status"] = msg
 
-            elif self.session.state == "CAPTURING":
+            elif sess_state == "CAPTURING":
                 status, _ = self.session.process_face_capture(face, pitch, yaw, face_crop)
                 progress, _ = self.session.get_progress()
                 updates["status"]   = status
                 updates["progress"] = progress
-                cv2.rectangle(img, (x1, y1), (x2, y2), (0, 200, 200), 2)
-                cv2.putText(img, f"{int(progress * 100)}%  {status}", (20, 50),
+                cv2.rectangle(out, (x1, y1), (x2, y2), (0, 200, 200), 2)
+                cv2.putText(out, f"{int(progress * 100)}%  {status}", (20, 50),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 200), 2)
 
-            elif self.session.state == "COMPLETE":
-                cv2.rectangle(img, (x1, y1), (x2, y2), (0, 200, 0), 2)
-                cv2.putText(img, "ALL ANGLES CAPTURED",
+            elif sess_state == "COMPLETE":
+                cv2.rectangle(out, (x1, y1), (x2, y2), (0, 200, 0), 2)
+                cv2.putText(out, "ALL ANGLES CAPTURED",
                             (w_img // 2 - 180, h_img // 2),
                             cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 200, 0), 3)
                 updates["status"]   = "complete"
                 updates["progress"] = 1.0
 
-            updates["session_state"] = self.session.state
+            updates["session_state"] = sess_state
 
         else:
             msg = "Show only 1 face" if len(faces) > 1 else "No face detected"
-            cv2.putText(img, msg, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (100, 100, 255), 2)
+            cv2.putText(out, msg, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (80, 80, 255), 2)
             updates["status"] = msg
 
-        # FIX: single lock acquisition per frame
         with _lock:
             _shared.update(updates)
 
-        return av.VideoFrame.from_ndarray(img, format="bgr24")
+        result = av.VideoFrame.from_ndarray(out, format="bgr24")
+        self._last_output = result   # cache for skipped frames
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -388,34 +390,36 @@ elif st.session_state.step == "capture":
             def make_dot(name, label):
                 done      = name in captured
                 bg        = "#2e7d32" if done else "#e8e8e8"
-                border    = "#2e7d32" if done else "#d0d0d0"
+                border_c  = "#2e7d32" if done else "#d0d0d0"
                 text_c    = "#2e7d32" if done else "#aaa"
-                icon_html = '<span style="color:#fff;font-size:13px;font-weight:700;">&#10003;</span>' if done else ""
-                return f'''
-                <div style="display:flex;flex-direction:column;align-items:center;gap:4px;">
-                    <div style="width:32px;height:32px;border-radius:50%;background:{bg};
-                                border:2px solid {border};display:flex;align-items:center;
-                                justify-content:center;">{icon_html}</div>
-                    <span style="font-size:11px;color:{text_c};font-weight:500;">{label}</span>
-                </div>'''
+                icon_html = "<span style='color:#fff;font-size:13px;font-weight:700;'>&#10003;</span>" if done else ""
+                return (
+                    "<div style='display:flex;flex-direction:column;align-items:center;gap:4px;'>"
+                    f"<div style='width:32px;height:32px;border-radius:50%;background:{bg};"
+                    f"border:2px solid {border_c};display:flex;align-items:center;justify-content:center;'>"
+                    f"{icon_html}</div>"
+                    f"<span style='font-size:11px;color:{text_c};font-weight:500;'>{label}</span>"
+                    "</div>"
+                )
 
-            st.markdown(f'''
-            <div style="margin:16px 0;">
-                <div style="display:flex;justify-content:center;margin-bottom:10px;">
-                    {make_dot("look_up", "Up")}
-                </div>
-                <div style="display:flex;justify-content:center;gap:12px;align-items:center;">
-                    {make_dot("left_full",  "L 90")}
-                    {make_dot("left_semi",  "L 45")}
-                    {make_dot("center",     "Center")}
-                    {make_dot("right_semi", "R 45")}
-                    {make_dot("right_full", "R 90")}
-                </div>
-                <div style="display:flex;justify-content:center;margin-top:10px;">
-                    {make_dot("look_down", "Down")}
-                </div>
-            </div>
-            ''', unsafe_allow_html=True)
+            dot_up    = make_dot("look_up",    "Up")
+            dot_l90   = make_dot("left_full",  "L 90")
+            dot_l45   = make_dot("left_semi",  "L 45")
+            dot_ctr   = make_dot("center",     "Center")
+            dot_r45   = make_dot("right_semi", "R 45")
+            dot_r90   = make_dot("right_full", "R 90")
+            dot_down  = make_dot("look_down",  "Down")
+
+            dots_html = (
+                "<div style='margin:16px 0;'>"
+                  "<div style='display:flex;justify-content:center;margin-bottom:10px;'>" + dot_up + "</div>"
+                  "<div style='display:flex;justify-content:center;gap:12px;align-items:center;'>"
+                    + dot_l90 + dot_l45 + dot_ctr + dot_r45 + dot_r90 +
+                  "</div>"
+                  "<div style='display:flex;justify-content:center;margin-top:10px;'>" + dot_down + "</div>"
+                "</div>"
+            )
+            st.markdown(dots_html, unsafe_allow_html=True)
 
             done_count = len(captured)
             st.markdown(f'<div style="text-align:center;font-size:13px;color:#888;">{done_count} of 7 captured</div>',
