@@ -311,7 +311,9 @@ elif st.session_state.step == "capture":
             rtc_configuration=RTCConfiguration(
                 {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
             ),
-            media_stream_constraints={"video": {"width": 1280, "height": 720}, "audio": False},
+            # media_stream_constraints={"video": {"width": 1280, "height": 720}, "audio": False},
+            media_stream_constraints={"video": {"width": 640, "height": 480}, "audio": False},
+
         )
 
     with col_info:
