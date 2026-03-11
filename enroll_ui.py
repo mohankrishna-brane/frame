@@ -6,9 +6,83 @@ import av
 import threading
 from streamlit_autorefresh import st_autorefresh
 
+import uuid
+import psycopg2
 from core.vision_engine import FaceEngine
 from core.storage import get_storage_engine
 from logic.enrollment import EnrollmentSession
+
+# --- DB Config ---
+DB_CONFIG = {
+    "dbname": "workflow_system",
+    "user": "postgres",
+    "password": "9ets0n1234",
+    "host": "10.26.1.175",
+    "port": "5432"
+}
+
+ANGLE_CONFIG = {
+    'center':     (True,  True),
+    'look_up':    (False, False),
+    'look_down':  (False, False),
+    'left_semi':  (False, False),
+    'right_semi': (False, False),
+    'left_full':  (False, False),
+    'right_full': (False, False),
+}
+
+def save_to_postgres(emp_id, emp_name, bucket_data):
+    """Insert face encodings directly from bucket_data into Postgres."""
+    import json, numpy as np
+    conn = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cur = conn.cursor()
+        insert_query = """
+        INSERT INTO workflow_runtime.iot_face_encodings
+        (face_encoding_id, person_type, encoding_vector, encoding_model, encoding_dimension,
+         face_location, face_quality_score, face_angle, is_frontal, is_primary,
+         tenant_id, is_active, person_id, person_name)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT DO NOTHING;
+        """
+        count = 0
+        for angle, data in bucket_data.items():
+            if not data.get("captured"):
+                continue
+            vec = data["vector"]
+            vec = vec / np.linalg.norm(vec)
+            vector_list = vec.tolist()
+            is_frontal, is_primary = ANGLE_CONFIG.get(angle, (False, False))
+            cur.execute(insert_query, (
+                str(uuid.uuid4()),
+                'employee',
+                vector_list,
+                'insightface',
+                len(vector_list),
+                None,
+                None,
+                json.dumps({"angle": angle}),
+                is_frontal,
+                is_primary,
+                'T689',
+                True,
+                emp_id,
+                emp_name,
+            ))
+            count += 1
+        conn.commit()
+        print(f"[DB] Inserted {count} encodings for {emp_id} ({emp_name})")
+        return True, count
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        print(f"[DB] Error: {e}")
+        return False, str(e)
+    finally:
+        if conn:
+            cur.close()
+            conn.close()
 
 # --- Page Config ---
 st.set_page_config(page_title="NSL FRAME", layout="wide", initial_sidebar_state="collapsed")
@@ -252,6 +326,7 @@ if "step"     not in st.session_state: st.session_state.step     = "form"
 if "emp_name" not in st.session_state: st.session_state.emp_name = ""
 if "emp_id"   not in st.session_state: st.session_state.emp_id   = ""
 if "saved"    not in st.session_state: st.session_state.saved    = False
+if "db_msg"   not in st.session_state: st.session_state.db_msg   = ""
 
 # ---------------------------------------------------------------------------
 # Header
@@ -310,7 +385,7 @@ elif st.session_state.step == "capture":
         state    = _shared["session_state"]   # FIX: read from shared, not from session object
 
     # Always auto-refresh so UI stays in sync; stream keeps running
-    st_autorefresh(interval=1500, key="capture_refresh")
+    st_autorefresh(interval=2000, key="capture_refresh")
 
     col_video, col_info = st.columns([3, 1.5], gap="medium")
 
@@ -413,31 +488,54 @@ elif st.session_state.step == "capture":
             if st.button("Save & Complete Enrollment", use_container_width=True, key="btn_save"):
                 session = get_enrollment_session()
                 _, buckets = session.get_progress()
-                get_db().save_identity(st.session_state.emp_id, st.session_state.emp_name, buckets)
+                emp_id   = st.session_state.emp_id
+                emp_name = st.session_state.emp_name
+
+                # 1. Save to filesystem (npy + metadata)
+                get_db().save_identity(emp_id, emp_name, buckets)
+
+                # 2. Push to Postgres
+                ok, result = save_to_postgres(emp_id, emp_name, buckets)
+                if ok:
+                    st.session_state.db_msg = f"Saved {result} encodings to database."
+                else:
+                    st.session_state.db_msg = f"⚠️ Filesystem saved but DB failed: {result}"
+
                 st.session_state.saved = True
                 st.rerun()
 
-        # Success banner
+        # Success banner + Enroll Next button
         if st.session_state.saved:
-            st.markdown("""
+            st.markdown(f"""
             <div style="background:#e8f5e9; border:1px solid #c8e6c9; border-radius:12px;
-                        padding:14px; text-align:center; margin-top:8px;">
-                <div style="color:#2e7d32; font-weight:600; font-size:14px;">Enrollment saved successfully!</div>
-                <div style="color:#666; font-size:12px; margin-top:4px;">Face data stored. You can enroll another employee.</div>
+                        padding:20px; text-align:center; margin-top:8px;">
+                <div style="font-size:28px; margin-bottom:8px;">✅</div>
+                <div style="color:#2e7d32; font-weight:700; font-size:16px;">
+                    {st.session_state.emp_name} Enrolled Successfully!
+                </div>
+                <div style="color:#555; font-size:12px; margin-top:6px;">
+                    ID: {st.session_state.emp_id} &nbsp;|&nbsp; {st.session_state.db_msg}
+                </div>
             </div>
             """, unsafe_allow_html=True)
+            st.markdown('<div style="margin-top:12px;"></div>', unsafe_allow_html=True)
+            if st.button("➕  Enroll Next Employee", use_container_width=True, key="btn_enroll_next"):
+                reset_enrollment()
+                st.session_state.step     = "form"
+                st.session_state.emp_name = ""
+                st.session_state.emp_id   = ""
+                st.rerun()
 
-        # Back / Retry
-        st.markdown('<div style="margin-top:8px;"></div>', unsafe_allow_html=True)
-        col_a, col_b = st.columns(2, gap="small")
-        with col_a:
-            if st.button("Back", use_container_width=True, key="btn_back", type="secondary"):
-                reset_enrollment()
-                st.session_state.step  = "form"
-                st.session_state.saved = False
-                st.rerun()
-        with col_b:
-            if st.button("Retry", use_container_width=True, key="btn_retry", type="secondary"):
-                reset_enrollment()
-                st.session_state.saved = False
-                st.rerun()
+        # Back / Retry — hide after save
+        elif not st.session_state.saved:
+            st.markdown('<div style="margin-top:8px;"></div>', unsafe_allow_html=True)
+            col_a, col_b = st.columns(2, gap="small")
+            with col_a:
+                if st.button("Back", use_container_width=True, key="btn_back", type="secondary"):
+                    reset_enrollment()
+                    st.session_state.step  = "form"
+                    st.rerun()
+            with col_b:
+                if st.button("Retry", use_container_width=True, key="btn_retry", type="secondary"):
+                    reset_enrollment()
+                    st.rerun()
