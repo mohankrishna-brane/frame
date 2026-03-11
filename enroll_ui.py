@@ -331,7 +331,6 @@ elif st.session_state.step == "capture":
             video_processor_factory=FaceEnrollmentProcessor,
             rtc_configuration=RTC_CONFIG,
             async_processing=True,
-            server_rtc_signalling_timeout=30,  # give model load time to finish
             media_stream_constraints={
                 "video": {
                     "width":     {"ideal": 640, "max": 640},
