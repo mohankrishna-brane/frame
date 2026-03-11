@@ -179,6 +179,8 @@ class FaceEnrollmentProcessor(VideoProcessorBase):
         self.engine       = get_engine()
         self.session      = get_enrollment_session()
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+        # Always fetch current session so Retry/Back resets are picked up
+        self.session = get_enrollment_session()
         img = frame.to_ndarray(format="bgr24")
         img = cv2.flip(img, 1)
         out = img.copy()            # draw on a copy so img stays clean for crop
@@ -307,9 +309,8 @@ elif st.session_state.step == "capture":
         captured = list(_shared["buckets_captured"])
         state    = _shared["session_state"]   # FIX: read from shared, not from session object
 
-    # FIX: only auto-refresh while actively capturing; stop when done
-    if state not in ("COMPLETE",) and not st.session_state.saved:
-        st_autorefresh(interval=2000, key="capture_refresh")
+    # Always auto-refresh so UI stays in sync; stream keeps running
+    st_autorefresh(interval=1500, key="capture_refresh")
 
     col_video, col_info = st.columns([3, 1.5], gap="medium")
 
