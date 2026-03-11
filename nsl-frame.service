@@ -1,0 +1,24 @@
+
+[Unit]
+Description=NSL FRAME - Face Registration & Enrollment System
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/usrapps/frame
+ExecStart=/home/ubuntu/usrapps/.venv311/bin/streamlit run enroll_ui.py \
+    --server.address 0.0.0.0 \
+    --server.port 8501 \
+    --server.sslCertFile /home/ubuntu/usrapps/frame/cert.pem \
+    --server.sslKeyFile /home/ubuntu/usrapps/frame/key.pem \
+    --server.headless true \
+    --browser.gatherUsageStats false
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nsl-frame
+
+[Install]
+WantedBy=multi-user.target
