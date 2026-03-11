@@ -165,18 +165,6 @@ ALL_ANGLES = ["center", "look_up", "look_down", "left_semi", "right_semi", "left
 RTC_CONFIG = RTCConfiguration({
     "iceServers": [
         {"urls": ["stun:stun.l.google.com:19302"]},
-        {"urls": ["stun:stun1.l.google.com:19302"]},
-        # TURN relay — critical for Cloudflare tunnel (blocks WebRTC UDP)
-        {
-            "urls": ["turn:openrelay.metered.ca:80"],
-            "username": "openrelayproject",
-            "credential": "openrelayproject",
-        },
-        {
-            "urls": ["turn:openrelay.metered.ca:443?transport=tcp"],
-            "username": "openrelayproject",
-            "credential": "openrelayproject",
-        },
     ]
 })
 
