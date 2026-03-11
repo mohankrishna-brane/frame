@@ -170,6 +170,9 @@ class FaceEnrollmentProcessor(VideoProcessorBase):
         img = frame.to_ndarray(format="bgr24")
         img = cv2.flip(img, 1)
 
+        if self._frame_count % 2 != 0:
+            return av.VideoFrame.from_ndarray(img, format="bgr24")
+
         faces = self.engine.process_frame(img)
 
         if len(faces) == 1:
@@ -289,7 +292,7 @@ if st.session_state.step == "form":
 elif st.session_state.step == "capture":
 
     # Auto-refresh every 1.5s so dots/progress/buttons update live
-    st_autorefresh(interval=1500, key="capture_refresh")
+    st_autorefresh(interval=2000, key="capture_refresh")
 
     col_video, col_info = st.columns([3, 1.5], gap="medium")
 
@@ -308,11 +311,14 @@ elif st.session_state.step == "capture":
         webrtc_streamer(
             key="enrollment",
             video_processor_factory=FaceEnrollmentProcessor,
-            rtc_configuration=RTCConfiguration(
-                {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
-            ),
+            rtc_configuration=RTCConfiguration({
+                "iceServers": [
+                    {"urls": ["stun:stun.l.google.com:19302"]},
+                    {"urls": ["stun:stun1.l.google.com:19302"]},  # fallback STUN
+                ]
+            }),
             # media_stream_constraints={"video": {"width": 1280, "height": 720}, "audio": False},
-            media_stream_constraints={"video": {"width": 640, "height": 480}, "audio": False},
+            media_stream_constraints={"video": {"width": 640, "height": 480, "frameRate": 15}, "audio": False},
 
         )
 
