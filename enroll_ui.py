@@ -187,22 +187,10 @@ class FaceEnrollmentProcessor(VideoProcessorBase):
     def __init__(self):
         self.engine       = get_engine()
         self.session      = get_enrollment_session()
-        self._frame_count = 0
-        self._last_output = None   # cache last annotated frame to avoid flicker
-
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
         img = frame.to_ndarray(format="bgr24")
         img = cv2.flip(img, 1)
-        self._frame_count += 1
-
-        # On skipped frames return the last annotated output so overlays don't flicker.
-        # We still consume the incoming frame (keeps WebRTC happy / stream alive).
-        if self._frame_count % 2 != 0:
-            if self._last_output is not None:
-                return self._last_output
-            return av.VideoFrame.from_ndarray(img, format="bgr24")
-
-        out   = img.copy()          # draw on a copy so img stays clean for crop
+        out = img.copy()            # draw on a copy so img stays clean for crop
         h_img, w_img = out.shape[:2]
         updates = {}
 
@@ -261,9 +249,7 @@ class FaceEnrollmentProcessor(VideoProcessorBase):
         with _lock:
             _shared.update(updates)
 
-        result = av.VideoFrame.from_ndarray(out, format="bgr24")
-        self._last_output = result   # cache for skipped frames
-        return result
+        return av.VideoFrame.from_ndarray(out, format="bgr24")
 
 
 # ---------------------------------------------------------------------------
