@@ -136,17 +136,20 @@ _shared = _state["data"]
 # ---------------------------------------------------------------------------
 @st.cache_resource
 def get_engine():
-    return FaceEngine()
+    return FaceEngine()  # __init__ already calls prepare()
 
 @st.cache_resource
 def get_db():
     return get_storage_engine("filesystem")
 
-# EnrollmentSession is stateful — one shared instance per app session,
-# but we access it only through _shared["session_state"] from the UI thread.
 @st.cache_resource
 def get_enrollment_session():
     return EnrollmentSession()
+
+# Force all heavy models to load before any WebRTC connection attempt
+get_engine()
+get_enrollment_session()
+get_db()
 
 def reset_enrollment():
     """Clear session state and shared data atomically."""
@@ -327,7 +330,8 @@ elif st.session_state.step == "capture":
             key="enrollment",
             video_processor_factory=FaceEnrollmentProcessor,
             rtc_configuration=RTC_CONFIG,
-            async_processing=True,   # FIX: don't block recv() — critical for smooth video
+            async_processing=True,
+            server_rtc_signalling_timeout=30,  # give model load time to finish
             media_stream_constraints={
                 "video": {
                     "width":     {"ideal": 640, "max": 640},
