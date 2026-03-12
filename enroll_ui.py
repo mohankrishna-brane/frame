@@ -272,23 +272,29 @@ class FaceEnrollmentProcessor(VideoProcessorBase):
         # Always fetch current session so Retry/Back resets are picked up
         self.session = get_enrollment_session()
 
-        img = frame.to_ndarray(format="bgr24")
-        img = cv2.flip(img, 1)
-        out = img.copy()
-        h_img, w_img = out.shape[:2]
+        raw = frame.to_ndarray(format="bgr24")
+        # FIX: run ML on raw unflipped frame to match recognition pipeline
+        # Only flip the display output so it feels like a mirror to the user
+        out = cv2.flip(raw, 1)
+        h_img, w_img = raw.shape[:2]
         updates = {}
 
-        faces = self.engine.process_frame(img)
+        faces = self.engine.process_frame(raw)
 
         if len(faces) == 1:
             face = faces[0]
             pitch, yaw, roll = self.engine.compute_pose(face)
-            yaw = -yaw
+            # No yaw mirror needed — using raw unflipped frame now
 
             b  = face.bbox.astype(int)
             x1, y1 = max(0, b[0]), max(0, b[1])
             x2, y2 = min(w_img, b[2]), min(h_img, b[3])
-            face_crop = img[y1:y2, x1:x2].copy()
+
+            # Face crop from raw frame for correct embedding
+            face_crop = raw[y1:y2, x1:x2].copy()
+
+            # Mirror bbox x-coords for drawing on the flipped display frame
+            dx1, dx2 = w_img - x2, w_img - x1
 
             updates["pitch"] = float(pitch)
             updates["yaw"]   = float(yaw)
@@ -302,7 +308,7 @@ class FaceEnrollmentProcessor(VideoProcessorBase):
             if sess_state == "PRE_CHECK":
                 is_ready, msg = self.session.run_pre_check(face, pitch, yaw)
                 color = (0, 220, 0) if is_ready else (80, 80, 255)
-                cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
+                cv2.rectangle(out, (dx1, y1), (dx2, y2), color, 2)
                 cv2.putText(out, msg, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
                 updates["status"] = msg
 
@@ -311,12 +317,12 @@ class FaceEnrollmentProcessor(VideoProcessorBase):
                 progress, _ = self.session.get_progress()
                 updates["status"]   = status
                 updates["progress"] = progress
-                cv2.rectangle(out, (x1, y1), (x2, y2), (0, 200, 200), 2)
+                cv2.rectangle(out, (dx1, y1), (dx2, y2), (0, 200, 200), 2)
                 cv2.putText(out, f"{int(progress * 100)}%  {status}", (20, 50),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 200), 2)
 
             elif sess_state == "COMPLETE":
-                cv2.rectangle(out, (x1, y1), (x2, y2), (0, 200, 0), 2)
+                cv2.rectangle(out, (dx1, y1), (dx2, y2), (0, 200, 0), 2)
                 cv2.putText(out, "ALL ANGLES CAPTURED",
                             (w_img // 2 - 180, h_img // 2),
                             cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 200, 0), 3)
