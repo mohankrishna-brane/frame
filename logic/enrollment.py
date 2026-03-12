@@ -2,6 +2,8 @@ import numpy as np
 
 
 class EnrollmentSession:
+    CANDIDATES_NEEDED = 5
+
     def __init__(self):
         self.state = "PRE_CHECK"
         self.pre_check_counter = 0
@@ -10,13 +12,13 @@ class EnrollmentSession:
         self.bucket_tolerance = 12
 
         self.buckets = {
-            "center":      {"yaw": 0,   "pitch": 0,   "captured": False, "vector": None, "image": None},
-            "look_up":     {"yaw": 0,   "pitch": 25,  "captured": False, "vector": None, "image": None},
-            "look_down":   {"yaw": 0,   "pitch": -25, "captured": False, "vector": None, "image": None},
-            "left_semi":   {"yaw": 25,  "pitch": 0,   "captured": False, "vector": None, "image": None},
-            "right_semi":  {"yaw": -25, "pitch": 0,   "captured": False, "vector": None, "image": None},
-            "left_full":   {"yaw": 45,  "pitch": 0,   "captured": False, "vector": None, "image": None},
-            "right_full":  {"yaw": -45, "pitch": 0,   "captured": False, "vector": None, "image": None},
+            "center":      {"yaw": 0,   "pitch": 0,   "captured": False, "vector": None, "image": None, "candidates": []},
+            "look_up":     {"yaw": 0,   "pitch": 25,  "captured": False, "vector": None, "image": None, "candidates": []},
+            "look_down":   {"yaw": 0,   "pitch": -25, "captured": False, "vector": None, "image": None, "candidates": []},
+            "left_semi":   {"yaw": 25,  "pitch": 0,   "captured": False, "vector": None, "image": None, "candidates": []},
+            "right_semi":  {"yaw": -25, "pitch": 0,   "captured": False, "vector": None, "image": None, "candidates": []},
+            "left_full":   {"yaw": 45,  "pitch": 0,   "captured": False, "vector": None, "image": None, "candidates": []},
+            "right_full":  {"yaw": -45, "pitch": 0,   "captured": False, "vector": None, "image": None, "candidates": []},
         }
 
     @staticmethod
@@ -72,14 +74,22 @@ class EnrollmentSession:
                 pitch_tol = 8
 
             if d_yaw < yaw_tol and d_pitch < pitch_tol:
-                data["captured"] = True
-                data["vector"]   = self._normalize(face.embedding)  # FIX: normalize at source
-                data["image"]    = face_image
+                data["candidates"].append((face.det_score, face.embedding.copy(), face_image))
+                n = len(data["candidates"])
 
-                if self.get_progress()[0] == 1.0:
-                    self.state = "COMPLETE"
+                if n >= self.CANDIDATES_NEEDED:
+                    best = max(data["candidates"], key=lambda x: x[0])
+                    data["captured"]    = True
+                    data["vector"]      = self._normalize(best[1])
+                    data["image"]       = best[2]
+                    data["candidates"]  = []
 
-                return f"Captured: {name}", True
+                    if self.get_progress()[0] == 1.0:
+                        self.state = "COMPLETE"
+
+                    return f"Captured: {name}", True
+
+                return f"Hold for {name}... ({n}/{self.CANDIDATES_NEEDED})", False
 
         return "Find the target angles...", False
 
