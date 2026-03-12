@@ -313,7 +313,10 @@ class FaceEnrollmentProcessor(VideoProcessorBase):
                 updates["status"] = msg
 
             elif sess_state == "CAPTURING":
-                status, _ = self.session.process_face_capture(face, pitch, yaw, face_crop)
+                if face.det_score >= 0.75:
+                    status, _ = self.session.process_face_capture(face, pitch, yaw, face_crop)
+                else:
+                    status = "Low Quality — improve lighting"
                 progress, _ = self.session.get_progress()
                 updates["status"]   = status
                 updates["progress"] = progress
