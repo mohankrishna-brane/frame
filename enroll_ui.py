@@ -1,88 +1,17 @@
 import streamlit as st
 import cv2
 import numpy as np
+import uuid
+import json
+import threading
+import psycopg2
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
 import av
-import threading
 from streamlit_autorefresh import st_autorefresh
 
-import uuid
-import psycopg2
 from core.vision_engine import FaceEngine
 from core.storage import get_storage_engine
 from logic.enrollment import EnrollmentSession
-
-# --- DB Config ---
-DB_CONFIG = {
-    "dbname": "workflow_system",
-    "user": "postgres",
-    "password": "9ets0n1234",
-    "host": "10.26.1.175",
-    "port": "5432"
-}
-
-ANGLE_CONFIG = {
-    'center':     (True,  True),
-    'look_up':    (False, False),
-    'look_down':  (False, False),
-    'left_semi':  (False, False),
-    'right_semi': (False, False),
-    'left_full':  (False, False),
-    'right_full': (False, False),
-}
-
-def save_to_postgres(emp_id, emp_name, bucket_data):
-    """Insert face encodings directly from bucket_data into Postgres."""
-    import json, numpy as np
-    conn = None
-    try:
-        conn = psycopg2.connect(**DB_CONFIG)
-        cur = conn.cursor()
-        insert_query = """
-        INSERT INTO workflow_runtime.iot_face_encodings
-        (face_encoding_id, person_type, encoding_vector, encoding_model, encoding_dimension,
-         face_location, face_quality_score, face_angle, is_frontal, is_primary,
-         tenant_id, is_active, person_id, person_name)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT DO NOTHING;
-        """
-        count = 0
-        for angle, data in bucket_data.items():
-            if not data.get("captured"):
-                continue
-            vec = data["vector"]
-            vec = vec / np.linalg.norm(vec)
-            vector_list = vec.tolist()
-            is_frontal, is_primary = ANGLE_CONFIG.get(angle, (False, False))
-            cur.execute(insert_query, (
-                str(uuid.uuid4()),
-                'employee',
-                vector_list,
-                'insightface',
-                len(vector_list),
-                None,
-                None,
-                json.dumps({"angle": angle}),
-                is_frontal,
-                is_primary,
-                'T689',
-                True,
-                emp_id,
-                emp_name,
-            ))
-            count += 1
-        conn.commit()
-        print(f"[DB] Inserted {count} encodings for {emp_id} ({emp_name})")
-        return True, count
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        print(f"[DB] Error: {e}")
-        return False, str(e)
-    finally:
-        if conn:
-            cur.close()
-            conn.close()
 
 # --- Page Config ---
 st.set_page_config(page_title="NSL FRAME", layout="wide", initial_sidebar_state="collapsed")
@@ -178,11 +107,83 @@ st.markdown("""
         font-weight: 600;
         font-family: 'Inter', sans-serif;
     }
-    .pill-precheck { background: #fff3e0; color: #e65100; }
+    .pill-precheck  { background: #fff3e0; color: #e65100; }
     .pill-capturing { background: #e3f2fd; color: #1565c0; }
-    .pill-complete { background: #e8f5e9; color: #2e7d32; }
+    .pill-complete  { background: #e8f5e9; color: #2e7d32; }
 </style>
 """, unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------------
+# DB Config
+# ---------------------------------------------------------------------------
+DB_CONFIG = {
+    "dbname":   "workflow_system",
+    "user":     "postgres",
+    "password": "9ets0n1234",
+    "host":     "10.26.1.175",
+    "port":     "5432",
+}
+
+ANGLE_CONFIG = {
+    "center":     (True,  True),
+    "look_up":    (False, False),
+    "look_down":  (False, False),
+    "left_semi":  (False, False),
+    "right_semi": (False, False),
+    "left_full":  (False, False),
+    "right_full": (False, False),
+}
+
+def save_to_postgres(emp_id, emp_name, bucket_data):
+    """Insert face encodings into Postgres. Vectors already normalized at source."""
+    conn = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cur  = conn.cursor()
+        insert_query = """
+        INSERT INTO workflow_runtime.iot_face_encodings
+        (face_encoding_id, person_type, encoding_vector, encoding_model, encoding_dimension,
+         face_location, face_quality_score, face_angle, is_frontal, is_primary,
+         tenant_id, is_active, person_id, person_name)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT DO NOTHING;
+        """
+        count = 0
+        for angle, data in bucket_data.items():
+            if not data.get("captured"):
+                continue
+            # Vector already normalized in EnrollmentSession — no re-normalization here
+            vector_list = data["vector"].tolist()
+            is_frontal, is_primary = ANGLE_CONFIG.get(angle, (False, False))
+            cur.execute(insert_query, (
+                str(uuid.uuid4()),
+                "employee",
+                vector_list,
+                "insightface",
+                len(vector_list),
+                None,
+                None,
+                json.dumps({"angle": angle}),
+                is_frontal,
+                is_primary,
+                "T689",
+                True,
+                emp_id,
+                emp_name,
+            ))
+            count += 1
+        conn.commit()
+        print(f"[DB] Inserted {count} encodings for {emp_id} ({emp_name})")
+        return True, f"Saved {count} encodings to database."
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        print(f"[DB] Error: {e}")
+        return False, str(e)
+    finally:
+        if conn:
+            cur.close()
+            conn.close()
 
 # ---------------------------------------------------------------------------
 # Shared state — survives Streamlit reruns, accessed from WebRTC thread
@@ -192,21 +193,21 @@ def get_shared_state():
     return {
         "lock": threading.Lock(),
         "data": {
-            "pitch": 0.0,
-            "yaw": 0.0,
-            "status": "",
-            "progress": 0.0,
+            "pitch":         0.0,
+            "yaw":           0.0,
+            "status":        "",
+            "progress":      0.0,
             "buckets_captured": [],
-            "session_state": "PRE_CHECK",   # mirror of EnrollmentSession.state
+            "session_state": "PRE_CHECK",
         },
     }
 
-_state = get_shared_state()
-_lock  = _state["lock"]
+_state  = get_shared_state()
+_lock   = _state["lock"]
 _shared = _state["data"]
 
 # ---------------------------------------------------------------------------
-# Cached singletons — only stateless/heavy-init objects go here
+# Cached singletons
 # ---------------------------------------------------------------------------
 @st.cache_resource
 def get_engine():
@@ -225,39 +226,55 @@ get_engine()
 get_enrollment_session()
 get_db()
 
-def reset_enrollment():
-    """Clear session state and shared data atomically."""
-    get_enrollment_session.clear()
-    with _lock:
-        _shared["progress"] = 0.0
-        _shared["status"] = ""
-        _shared["buckets_captured"] = []
-        _shared["session_state"] = "PRE_CHECK"
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 ALL_ANGLES = ["center", "look_up", "look_down", "left_semi", "right_semi", "left_full", "right_full"]
 
-RTC_CONFIG = RTCConfiguration({
-    "iceServers": [
-        {"urls": ["stun:stun.l.google.com:19302"]},
-    ]
-})
+RTC_CONFIG = RTCConfiguration({"iceServers": []})
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def reset_enrollment():
+    get_enrollment_session.clear()
+    st.session_state.saved  = False
+    st.session_state.db_msg = ""
+    with _lock:
+        _shared["progress"]      = 0.0
+        _shared["status"]        = ""
+        _shared["buckets_captured"] = []
+        _shared["session_state"] = "PRE_CHECK"
+
+def make_dot(name, label, captured):
+    done      = name in captured
+    bg        = "#2e7d32" if done else "#e8e8e8"
+    border_c  = "#2e7d32" if done else "#d0d0d0"
+    text_c    = "#2e7d32" if done else "#aaa"
+    icon_html = "<span style='color:#fff;font-size:13px;font-weight:700;'>&#10003;</span>" if done else ""
+    return (
+        "<div style='display:flex;flex-direction:column;align-items:center;gap:4px;'>"
+        f"<div style='width:32px;height:32px;border-radius:50%;background:{bg};"
+        f"border:2px solid {border_c};display:flex;align-items:center;justify-content:center;'>"
+        f"{icon_html}</div>"
+        f"<span style='font-size:11px;color:{text_c};font-weight:500;'>{label}</span>"
+        "</div>"
+    )
 
 # ---------------------------------------------------------------------------
 # Video processor
 # ---------------------------------------------------------------------------
 class FaceEnrollmentProcessor(VideoProcessorBase):
     def __init__(self):
-        self.engine       = get_engine()
-        self.session      = get_enrollment_session()
+        self.engine = get_engine()
+
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
         # Always fetch current session so Retry/Back resets are picked up
         self.session = get_enrollment_session()
+
         img = frame.to_ndarray(format="bgr24")
         img = cv2.flip(img, 1)
-        out = img.copy()            # draw on a copy so img stays clean for crop
+        out = img.copy()
         h_img, w_img = out.shape[:2]
         updates = {}
 
@@ -268,7 +285,7 @@ class FaceEnrollmentProcessor(VideoProcessorBase):
             pitch, yaw, roll = self.engine.compute_pose(face)
             yaw = -yaw
 
-            b = face.bbox.astype(int)
+            b  = face.bbox.astype(int)
             x1, y1 = max(0, b[0]), max(0, b[1])
             x2, y2 = min(w_img, b[2]), min(h_img, b[3])
             face_crop = img[y1:y2, x1:x2].copy()
@@ -280,7 +297,7 @@ class FaceEnrollmentProcessor(VideoProcessorBase):
                 if self.session.get_progress()[1].get(name, {}).get("captured", False)
             ]
 
-            sess_state = self.session.state   # read once to avoid race
+            sess_state = self.session.state
 
             if sess_state == "PRE_CHECK":
                 is_ready, msg = self.session.run_pre_check(face, pitch, yaw)
@@ -335,7 +352,7 @@ st.markdown("""
 <div style="text-align:center; margin-bottom:24px;">
     <div style="font-size:26px;">
         <span style="color:#1a2b6d; font-weight:700;">NSL</span>
-        <span style="color:#1a1a2e; font-weight:700;">FRAME</span>
+        <span style="color:#1a1a2e; font-weight:700;"> FRAME</span>
     </div>
     <div style="font-size:13px; color:#999; margin-top:2px;">Face Registration & Enrollment System</div>
 </div>
@@ -377,15 +394,14 @@ if st.session_state.step == "form":
 # ===========================================================================
 elif st.session_state.step == "capture":
 
-    # Read shared state once at the top of this render
+    st_autorefresh(interval=2000, key="capture_refresh")
+
+    # Read shared state once at top of render
     with _lock:
         status   = _shared["status"]
         progress = _shared["progress"]
         captured = list(_shared["buckets_captured"])
-        state    = _shared["session_state"]   # FIX: read from shared, not from session object
-
-    # Always auto-refresh so UI stays in sync; stream keeps running
-    st_autorefresh(interval=2000, key="capture_refresh")
+        state    = _shared["session_state"]
 
     col_video, col_info = st.columns([3, 1.5], gap="medium")
 
@@ -409,8 +425,8 @@ elif st.session_state.step == "capture":
             async_processing=True,
             media_stream_constraints={
                 "video": {
-                    "width":     {"ideal": 1280, "max": 1280},
-                    "height":    {"ideal": 720, "max": 720},
+                    "width":     {"ideal": 640, "max": 640},
+                    "height":    {"ideal": 480, "max": 480},
                     "frameRate": {"ideal": 15,  "max": 20},
                 },
                 "audio": False,
@@ -420,7 +436,6 @@ elif st.session_state.step == "capture":
     # ── Info column ─────────────────────────────────────────────────────────
     with col_info:
 
-        # Status pill
         if state == "PRE_CHECK":
             pill_class, pill_text = "pill-precheck", "Pre-Check"
         elif state == "CAPTURING":
@@ -440,39 +455,24 @@ elif st.session_state.step == "capture":
                 st.progress(progress)
 
             # 7-dot layout
-            def make_dot(name, label):
-                done      = name in captured
-                bg        = "#2e7d32" if done else "#e8e8e8"
-                border_c  = "#2e7d32" if done else "#d0d0d0"
-                text_c    = "#2e7d32" if done else "#aaa"
-                icon_html = "<span style='color:#fff;font-size:13px;font-weight:700;'>&#10003;</span>" if done else ""
-                return (
-                    "<div style='display:flex;flex-direction:column;align-items:center;gap:4px;'>"
-                    f"<div style='width:32px;height:32px;border-radius:50%;background:{bg};"
-                    f"border:2px solid {border_c};display:flex;align-items:center;justify-content:center;'>"
-                    f"{icon_html}</div>"
-                    f"<span style='font-size:11px;color:{text_c};font-weight:500;'>{label}</span>"
-                    "</div>"
-                )
+            dot_up   = make_dot("look_up",    "Up",     captured)
+            dot_l90  = make_dot("left_full",  "L 90",   captured)
+            dot_l45  = make_dot("left_semi",  "L 45",   captured)
+            dot_ctr  = make_dot("center",     "Center", captured)
+            dot_r45  = make_dot("right_semi", "R 45",   captured)
+            dot_r90  = make_dot("right_full", "R 90",   captured)
+            dot_down = make_dot("look_down",  "Down",   captured)
 
-            dot_up    = make_dot("look_up",    "Up")
-            dot_l90   = make_dot("left_full",  "L 90")
-            dot_l45   = make_dot("left_semi",  "L 45")
-            dot_ctr   = make_dot("center",     "Center")
-            dot_r45   = make_dot("right_semi", "R 45")
-            dot_r90   = make_dot("right_full", "R 90")
-            dot_down  = make_dot("look_down",  "Down")
-
-            dots_html = (
+            st.markdown(
                 "<div style='margin:16px 0;'>"
-                  "<div style='display:flex;justify-content:center;margin-bottom:10px;'>" + dot_up + "</div>"
-                  "<div style='display:flex;justify-content:center;gap:12px;align-items:center;'>"
-                    + dot_l90 + dot_l45 + dot_ctr + dot_r45 + dot_r90 +
-                  "</div>"
-                  "<div style='display:flex;justify-content:center;margin-top:10px;'>" + dot_down + "</div>"
+                "<div style='display:flex;justify-content:center;margin-bottom:10px;'>" + dot_up + "</div>"
+                "<div style='display:flex;justify-content:center;gap:12px;align-items:center;'>"
+                + dot_l90 + dot_l45 + dot_ctr + dot_r45 + dot_r90 +
                 "</div>"
+                "<div style='display:flex;justify-content:center;margin-top:10px;'>" + dot_down + "</div>"
+                "</div>",
+                unsafe_allow_html=True
             )
-            st.markdown(dots_html, unsafe_allow_html=True)
 
             done_count = len(captured)
             st.markdown(f'<div style="text-align:center;font-size:13px;color:#888;">{done_count} of 7 captured</div>',
@@ -486,25 +486,21 @@ elif st.session_state.step == "capture":
         if state == "COMPLETE" and not st.session_state.saved:
             st.markdown('<div style="margin-top:8px;"></div>', unsafe_allow_html=True)
             if st.button("Save & Complete Enrollment", use_container_width=True, key="btn_save"):
-                session = get_enrollment_session()
+                session  = get_enrollment_session()
                 _, buckets = session.get_progress()
                 emp_id   = st.session_state.emp_id
                 emp_name = st.session_state.emp_name
 
-                # 1. Save to filesystem (npy + metadata)
+                # 1. Save to filesystem (npy + metadata) — no re-normalization
                 get_db().save_identity(emp_id, emp_name, buckets)
 
-                # 2. Push to Postgres
+                # 2. Push to Postgres — no re-normalization
                 ok, result = save_to_postgres(emp_id, emp_name, buckets)
-                if ok:
-                    st.session_state.db_msg = f"Saved {result} encodings to database."
-                else:
-                    st.session_state.db_msg = f"⚠️ Filesystem saved but DB failed: {result}"
-
-                st.session_state.saved = True
+                st.session_state.db_msg = result
+                st.session_state.saved  = True
                 st.rerun()
 
-        # Success banner + Enroll Next button
+        # Success banner + Enroll Next
         if st.session_state.saved:
             st.markdown(f"""
             <div style="background:#e8f5e9; border:1px solid #c8e6c9; border-radius:12px;
@@ -526,14 +522,14 @@ elif st.session_state.step == "capture":
                 st.session_state.emp_id   = ""
                 st.rerun()
 
-        # Back / Retry — hide after save
+        # Back / Retry — hidden after save
         elif not st.session_state.saved:
             st.markdown('<div style="margin-top:8px;"></div>', unsafe_allow_html=True)
             col_a, col_b = st.columns(2, gap="small")
             with col_a:
                 if st.button("Back", use_container_width=True, key="btn_back", type="secondary"):
                     reset_enrollment()
-                    st.session_state.step  = "form"
+                    st.session_state.step = "form"
                     st.rerun()
             with col_b:
                 if st.button("Retry", use_container_width=True, key="btn_retry", type="secondary"):
