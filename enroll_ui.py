@@ -12,6 +12,7 @@ from streamlit_autorefresh import st_autorefresh
 from core.vision_engine import FaceEngine
 from core.storage import get_storage_engine
 from logic.enrollment import EnrollmentSession
+from logic.augmentation import run_augmentation
 
 # --- Page Config ---
 st.set_page_config(page_title="NSL FRAME", layout="wide", initial_sidebar_state="collapsed")
@@ -163,7 +164,7 @@ def save_to_postgres(emp_id, emp_name, bucket_data):
                 len(vector_list),
                 None,
                 None,
-                json.dumps({"angle": angle}),
+                json.dumps({"angle": angle, "type": "original"}),
                 is_frontal,
                 is_primary,
                 "T689",
@@ -502,6 +503,9 @@ elif st.session_state.step == "capture":
 
                 # 1. Save to filesystem (npy + metadata) — no re-normalization
                 get_db().save_identity(emp_id, emp_name, buckets)
+
+                # 1b. Augment (toggle via AUGMENTATION_ENABLED in logic/augmentation.py)
+                run_augmentation(emp_id, buckets, get_engine(), get_db())
 
                 # 2. Push to Postgres — no re-normalization
                 ok, result = save_to_postgres(emp_id, emp_name, buckets)

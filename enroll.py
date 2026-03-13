@@ -6,6 +6,7 @@ import numpy as np
 from core.vision_engine import FaceEngine
 from core.storage import get_storage_engine
 from logic.enrollment import EnrollmentSession
+from logic.augmentation import run_augmentation
 from ui.hud import RadarHUD
 
 try:
@@ -129,6 +130,7 @@ def main():
                 emp_id   = input("Enter Employee ID: ")
                 _, buckets = session.get_progress()
                 db.save_identity(emp_id, emp_name, buckets)
+                run_augmentation(emp_id, buckets, engine, db)
                 print("Successfully Saved! Exiting...")
                 break
     finally:
